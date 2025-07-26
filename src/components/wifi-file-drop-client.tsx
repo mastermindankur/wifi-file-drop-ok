@@ -2,7 +2,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Laptop, Smartphone, UploadCloud, Send, Download, Trash2, Wifi, WifiOff } from 'lucide-react';
+import { Laptop, Smartphone, UploadCloud, Send, Download, Trash2, Wifi, WifiOff, CheckCircle2, XCircle, Hourglass } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
@@ -45,11 +45,12 @@ export function WiFiFileDropClient() {
   const { myId, devices: discoveredDevices, sendFile: sendFileP2P } = usePeer(handleFileReceived);
   
   useEffect(() => {
-    setIsOnline(navigator.onLine);
-    const handleOnline = () => setIsOnline(true);
-    const handleOffline = () => setIsOnline(false);
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
+    // This effect should only run on the client
+    const setOnlineStatus = () => setIsOnline(navigator.onLine);
+    setOnlineStatus(); // Set initial status
+
+    window.addEventListener('online', setOnlineStatus);
+    window.addEventListener('offline', setOnlineStatus);
 
     const storedFiles = localStorage.getItem('receivedFiles');
     if (storedFiles) {
@@ -57,8 +58,8 @@ export function WiFiFileDropClient() {
     }
 
     return () => {
-        window.removeEventListener('online', handleOnline);
-        window.removeEventListener('offline', handleOffline);
+        window.removeEventListener('online', setOnlineStatus);
+        window.removeEventListener('offline', setOnlineStatus);
     };
   }, []);
 
@@ -85,7 +86,6 @@ export function WiFiFileDropClient() {
 
       const cleanup = sendFileP2P(file, device);
       
-      // Simulate progress for UI
       let progress = 0;
       const interval = setInterval(() => {
         progress += Math.random() * 25;
@@ -137,28 +137,54 @@ export function WiFiFileDropClient() {
   };
   
   const downloadFile = (file: ReceivedFile) => {
-    const link = document.createElement('a');
-    link.href = file.dataUrl;
-    link.download = file.name;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    try {
+      const link = document.createElement('a');
+      link.href = file.dataUrl;
+      link.download = file.name;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      // Clean up the object URL
+      URL.revokeObjectURL(file.dataUrl);
+    } catch (error) {
+      console.error("Failed to download file:", error);
+      toast({
+        title: "Download failed",
+        description: "Could not download the selected file.",
+        variant: "destructive"
+      })
+    }
   };
 
   useEffect(() => {
-    const activeTransfers = transferringFiles.filter(f => f.status === 'complete');
-    if (activeTransfers.length === 0 && transferringFiles.length > 0) {
+    // Clear completed/errored transfers after 5 seconds
+    if (transferringFiles.length > 0) {
+      const completedOrErrored = transferringFiles.filter(f => f.status !== 'transferring');
+      if (completedOrErrored.length > 0) {
         const timeout = setTimeout(() => {
-            setTransferringFiles([]);
+            setTransferringFiles(prev => prev.filter(f => f.status === 'transferring'));
         }, 5000);
         return () => clearTimeout(timeout);
+      }
     }
   }, [transferringFiles]);
 
 
+  const TransferStatusIcon = ({status}: {status: TransferringFile['status']}) => {
+    switch(status) {
+        case 'transferring':
+            return <Hourglass className="h-4 w-4 text-amber-500" />;
+        case 'complete':
+            return <CheckCircle2 className="h-4 w-4 text-green-500" />;
+        case 'error':
+            return <XCircle className="h-4 w-4 text-destructive" />;
+    }
+  }
+
+
   return (
     <div className="bg-background min-h-screen">
-      <header className="py-4 px-6 flex items-center justify-between">
+      <header className="py-4 px-6 flex items-center justify-between border-b">
         <div className="flex items-center gap-3">
             <div className="p-2 bg-primary/10 text-primary rounded-lg">
                <Wifi className="h-6 w-6" />
@@ -170,8 +196,8 @@ export function WiFiFileDropClient() {
             {isOnline ? "Online" : "Offline"}
         </Badge>
       </header>
-      <main className="p-4 sm:p-6 md:p-8 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-        <div className="lg:col-span-2 flex flex-col gap-8">
+      <main className="p-4 sm:p-6 md:p-8 grid grid-cols-1 md:grid-cols-3 gap-8">
+        <div className="md:col-span-2 flex flex-col gap-8">
           <Card 
             className={cn(
                 "transition-all duration-300",
@@ -233,9 +259,9 @@ export function WiFiFileDropClient() {
                   {transferringFiles.map(item => (
                     <li key={item.id}>
                       <div className="flex items-center gap-3 text-sm mb-2">
-                        <FileIcon mimeType={item.file.type} className="w-5 h-5 text-muted-foreground" />
+                        <TransferStatusIcon status={item.status} />
                         <span className="font-medium truncate flex-1">Sending <span className="text-primary">{item.file.name}</span> to <span className="text-primary">{item.targetDevice}</span></span>
-                         <Badge variant={item.status === 'complete' ? 'default' : 'secondary'} className={cn(item.status === 'complete' && "bg-green-500/80 hover:bg-green-500/70 text-primary-foreground")}>
+                         <Badge variant={item.status === 'complete' ? 'default' : 'secondary'} className={cn('capitalize', item.status === 'complete' && "bg-green-500/80 hover:bg-green-500/70 text-primary-foreground")}>
                            {item.status}
                          </Badge>
                       </div>
@@ -292,7 +318,7 @@ export function WiFiFileDropClient() {
           </Card>
         </div>
 
-        <div className="lg:col-span-1">
+        <div className="md:col-span-1">
           <Card>
             <CardHeader>
               <CardTitle>Available Devices</CardTitle>
@@ -316,7 +342,7 @@ export function WiFiFileDropClient() {
                 </ul>
               ) : (
                 <div className="text-center text-muted-foreground py-10">
-                    <p>{isOnline ? "Searching for devices..." : "You are offline."}</p>
+                    <p>{isOnline ? (myId ? "Searching for devices..." : "Initializing...") : "You are offline."}</p>
                 </div>
               )}
             </CardContent>

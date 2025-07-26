@@ -1,19 +1,13 @@
-
 'use client';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import Peer from 'simple-peer';
 import { db } from '@/lib/firebase';
-import { ref, onValue, set, onDisconnect, push, serverTimestamp, get, child } from 'firebase/database';
+import { ref, onValue, set, onDisconnect, push, child } from 'firebase/database';
 
 export interface Device {
   id: string;
   name: string;
   type: 'laptop' | 'phone';
-}
-
-export interface SignalData {
-  type: 'offer' | 'answer';
-  sdp: any;
 }
 
 export interface ReceivedFile {
@@ -35,7 +29,7 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
 
   const myDevice = useRef<Device>({
     id: '',
-    name: 'My Device',
+    name: `Device-${Math.random().toString(36).substring(2, 7)}`,
     type: Math.random() > 0.5 ? 'laptop' : 'phone',
   });
 
@@ -48,9 +42,14 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
   }, [myId]);
 
   const createPeer = useCallback((peerId: string, initiator: boolean) => {
+    // Avoid creating duplicate peers
+    if (peersRef.current[peerId]) {
+      return peersRef.current[peerId];
+    }
+    
     const peer = new Peer({
       initiator: initiator,
-      trickle: false,
+      trickle: false, // Set to false to send one single signal event
     });
 
     peer.on('signal', (data) => {
@@ -77,10 +76,10 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
         }
     });
     
-    peer.on('error', (err) => console.error('Peer error:', err));
+    peer.on('error', (err) => console.error('Peer error:', peerId, err));
     peer.on('connect', () => console.log('Peer connected:', peerId));
     peer.on('close', () => {
-        console.log("closing peer", peerId)
+        console.log("closing peer", peerId);
         delete peersRef.current[peerId];
     });
 
@@ -112,14 +111,17 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
     const peersDbRef = ref(db, PEERS_REF);
     const unsubscribeDevices = onValue(peersDbRef, (snapshot) => {
       const data = snapshot.val();
+      const discoveredDevices: Device[] = [];
       if (data) {
-        const discoveredDevices = Object.keys(data)
-          .filter(key => key !== myId)
-          .map(key => ({ id: key, ...data[key] }));
-        setDevices(discoveredDevices);
-      } else {
-        setDevices([]);
+        for (const key in data) {
+          if (key !== myId) {
+            discoveredDevices.push({ id: key, ...data[key] });
+            // Proactively create a peer connection
+            createPeer(key, true);
+          }
+        }
       }
+      setDevices(discoveredDevices);
     });
 
     const signalsRef = ref(db, `${SIGNALS_REF}/${myId}`);
@@ -133,6 +135,12 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
                 if (!peer) {
                     peer = createPeer(sender, false);
                 }
+                
+                // Prevent signaling race conditions
+                if (signalData.type === 'offer' && peer.initiator) {
+                    continue;
+                }
+
                 peer.signal(signalData);
                 
                 // Remove signal after processing
@@ -144,10 +152,12 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
     return () => {
         unsubscribeDevices();
         unsubscribeSignals();
-        Object.values(peersRef.current).forEach(peer => peer.destroy());
         if(myId) {
             set(ref(db, `${PEERS_REF}/${myId}`), null);
         }
+        Object.values(peersRef.current).forEach(peer => {
+          if (!peer.destroyed) peer.destroy();
+        });
     };
   }, [myId, createPeer]);
   
@@ -157,32 +167,34 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
       peer = createPeer(device.id, true);
     }
     
+    const send = () => sendFileChunked(peer, file);
+
     if (peer.connected) {
-        sendFileChunked(peer, file);
+        send();
     } else {
-        peer.on('connect', () => {
-            sendFileChunked(peer, file);
-        });
+        peer.once('connect', send);
     }
 
     return () => {
-        if (peersRef.current[device.id] && !peersRef.current[device.id].destroyed) {
-            peersRef.current[device.id].destroy();
-        }
+       // The connection is managed by the main effect, so we don't destroy it here.
+       // We can remove the connect listener if it hasn't fired yet.
+       peer.removeListener('connect', send);
     }
   };
 
   const sendFileChunked = (peer: Peer.Instance, file: File) => {
     const reader = new FileReader();
     reader.onload = (e) => {
-        const fileData = {
-            id: `${file.name}-${Date.now()}`,
-            name: file.name,
-            type: file.type,
-            size: file.size,
-            chunk: e.target?.result,
-        };
-        peer.send(JSON.stringify(fileData));
+        if (e.target?.result) {
+          const fileData = {
+              id: `${file.name}-${Date.now()}`,
+              name: file.name,
+              type: file.type,
+              size: file.size,
+              chunk: e.target.result,
+          };
+          peer.send(JSON.stringify(fileData));
+        }
     };
     reader.readAsArrayBuffer(file);
   }
