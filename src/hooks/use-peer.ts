@@ -2,7 +2,7 @@
 'use client';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import Peer from 'simple-peer';
-import { db } from '@/lib/firebase';
+import { initializeFirebase, db } from '@/lib/firebase';
 import { ref, onValue, set, onDisconnect, push, child, serverTimestamp, remove } from 'firebase/database';
 
 export interface Device {
@@ -33,12 +33,18 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
   const peersRef = useRef<{ [key: string]: Peer.Instance }>({});
   const [peerStatuses, setPeerStatuses] = useState<{ [key: string]: PeerStatus }>({});
   const receivedFileChunks = useRef<{ [key: string]: { chunks: ArrayBuffer[], metadata: any } }>({});
+  const [firebaseInitialized, setFirebaseInitialized] = useState(false);
 
   const myDevice = useRef<Device>({
     id: '',
     name: `Device-${Math.random().toString(36).substring(2, 7)}`,
     type:  typeof navigator !== 'undefined' && /Mobi|Android/i.test(navigator.userAgent) ? 'phone' : 'laptop',
   });
+
+  useEffect(() => {
+    initializeFirebase();
+    setFirebaseInitialized(true);
+  }, []);
   
   const updatePeerStatus = useCallback((peerId: string, status: PeerStatus) => {
     setPeerStatuses(prev => ({ ...prev, [peerId]: status }));
@@ -131,6 +137,7 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
 
 
   useEffect(() => {
+    if (!firebaseInitialized) return;
     const newPeerId = push(ref(db, PEERS_REF)).key;
     if (newPeerId) {
         setMyId(newPeerId);
@@ -154,10 +161,10 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
         cleanup();
         window.removeEventListener('beforeunload', cleanup);
     }
-  }, []);
+  }, [firebaseInitialized]);
 
   useEffect(() => {
-    if (!myId) return;
+    if (!myId || !firebaseInitialized) return;
 
     const peersDbRef = ref(db, PEERS_REF);
     const unsubscribeDevices = onValue(peersDbRef, (snapshot) => {
@@ -201,8 +208,12 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
                     continue;
                 }
 
-                peer.signal(signalData);
-                await remove(child(signalsRef, key));
+                try {
+                    await peer.signal(signalData);
+                    await remove(child(signalsRef, key));
+                } catch (err) {
+                    console.error("Error signaling peer", err);
+                }
             }
         }
     });
@@ -211,7 +222,7 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
       unsubscribeDevices();
       unsubscribeSignals();
     };
-  }, [myId, createPeer]);
+  }, [myId, createPeer, firebaseInitialized]);
   
   const sendFile = (
     file: File, 
