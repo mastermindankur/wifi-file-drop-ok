@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import Peer from 'simple-peer';
 import { db } from '@/lib/firebase';
 import { ref, onValue, set, onDisconnect, push, child, serverTimestamp, remove } from 'firebase/database';
+import { getDeviceName } from '@/lib/utils';
 
 export interface Device {
   id: string;
@@ -36,7 +37,7 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
 
   const myDevice = useRef<Device>({
     id: '',
-    name: `Device-${Math.random().toString(36).substring(2, 7)}`,
+    name: getDeviceName(),
     type:  typeof navigator !== 'undefined' && /Mobi|Android/i.test(navigator.userAgent) ? 'phone' : 'laptop',
   });
   
