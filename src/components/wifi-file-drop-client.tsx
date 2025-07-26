@@ -203,25 +203,32 @@ export function WiFiFileDropClient() {
             <h1 className="text-2xl font-bold text-foreground">WiFi File Drop</h1>
         </div>
         <div className="flex items-center gap-4">
-            {myDevice && (
-                <Tooltip>
-                    <TooltipTrigger asChild>
-                        <div className="flex items-center gap-2 cursor-default">
-                             <UserSquare2 className="h-5 w-5 text-muted-foreground" />
-                            <span className="text-sm font-medium text-foreground">{myDevice.name}</span>
-                        </div>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                        <p>This is you!</p>
-                    </TooltipContent>
-                </Tooltip>
-            )}
+            <Tooltip>
+                <TooltipTrigger asChild>
+                    <div className="flex items-center gap-2 cursor-default hidden md:flex">
+                         <UserSquare2 className="h-5 w-5 text-muted-foreground" />
+                        <span className="text-sm font-medium text-foreground">{myDevice?.name}</span>
+                    </div>
+                </TooltipTrigger>
+                <TooltipContent>
+                    <p>This is you!</p>
+                </TooltipContent>
+            </Tooltip>
             <Badge variant={isOnline ? "default" : "destructive"} className={cn("transition-all", isOnline ? "bg-green-500/80" : "bg-destructive")}>
                 {isOnline ? <Wifi className="mr-2 h-4 w-4" /> : <WifiOff className="mr-2 h-4 w-4" />}
                 {isOnline ? "Online" : "Offline"}
             </Badge>
         </div>
       </header>
+        {myDevice && (
+            <div className="p-4 flex flex-col items-center justify-center bg-accent/20 border-b md:hidden">
+                <div className="flex items-center gap-2 text-sm text-foreground font-medium">
+                    <UserSquare2 className="h-5 w-5 text-muted-foreground" />
+                    <span>{myDevice.name}</span>
+                </div>
+                 <p className="text-xs text-muted-foreground">This is you!</p>
+            </div>
+        )}
       <main className="p-4 sm:p-6 md:p-8 grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2 flex flex-col gap-8">
           <Card 
