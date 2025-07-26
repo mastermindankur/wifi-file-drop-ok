@@ -72,60 +72,62 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
     });
 
     peer.on('data', (data) => {
+        // First, check if the data is the metadata JSON
+        let metadata;
         try {
-            // Check for metadata first by trying to parse it as JSON
-            let message;
-            try {
-              message = JSON.parse(data.toString());
-            } catch (e) {
-              // Not a JSON object, so it's a binary chunk
+            const dataString = data.toString();
+            if (dataString.includes('"type":"metadata"')) {
+                metadata = JSON.parse(dataString);
             }
+        } catch (e) {
+            // Not a JSON string, so it must be a binary chunk
+        }
 
-            if (message && message.type === 'metadata') {
-                receivedFileChunks.current[message.fileId] = {
-                    chunks: [],
-                    metadata: message,
-                };
-            } else if (data instanceof ArrayBuffer) {
-                // This is a raw binary chunk. Find which file it belongs to.
-                 const fileId = Object.keys(receivedFileChunks.current).find(key => 
-                    !receivedFileChunks.current[key].metadata.isComplete
-                );
+        if (metadata) {
+            // It's a metadata packet. Initialize the chunk holder.
+            receivedFileChunks.current[metadata.fileId] = {
+                chunks: [],
+                metadata: metadata,
+            };
+        } else if (data instanceof ArrayBuffer || data instanceof Buffer) {
+            // It's a binary chunk. Find which file it belongs to.
+            const fileId = Object.keys(receivedFileChunks.current).find(key => 
+                !receivedFileChunks.current[key].metadata.isComplete
+            );
 
-                if (fileId && receivedFileChunks.current[fileId]) {
-                    const fileEntry = receivedFileChunks.current[fileId];
-                    fileEntry.chunks.push(data);
-                    const receivedSize = fileEntry.chunks.reduce((acc, chunk) => acc + chunk.byteLength, 0);
-
-                    if (receivedSize >= fileEntry.metadata.fileSize) {
-                        const blob = new Blob(fileEntry.chunks, { type: fileEntry.metadata.fileType });
-                        const dataUrl = URL.createObjectURL(blob);
-                        
-                        const newFile: ReceivedFile = {
-                          id: fileEntry.metadata.fileId,
-                          name: fileEntry.metadata.fileName,
-                          size: fileEntry.metadata.fileSize,
-                          type: fileEntry.metadata.fileType,
-                          date: new Date().toLocaleString(),
-                          dataUrl: dataUrl
-                        };
-                        onFileReceived(newFile);
-                        
-                        // Mark as complete and clean up
-                        fileEntry.metadata.isComplete = true; 
-                        delete receivedFileChunks.current[fileId];
-                    }
+            if (fileId && receivedFileChunks.current[fileId]) {
+                const fileEntry = receivedFileChunks.current[fileId];
+                fileEntry.chunks.push(data);
+                
+                const receivedSize = fileEntry.chunks.reduce((acc, chunk) => acc + chunk.byteLength, 0);
+                
+                if (receivedSize >= fileEntry.metadata.fileSize) {
+                    const blob = new Blob(fileEntry.chunks, { type: fileEntry.metadata.fileType });
+                    const dataUrl = URL.createObjectURL(blob);
+                    
+                    const newFile: ReceivedFile = {
+                      id: fileEntry.metadata.fileId,
+                      name: fileEntry.metadata.fileName,
+                      size: fileEntry.metadata.fileSize,
+                      type: fileEntry.metadata.fileType,
+                      date: new Date().toLocaleString(),
+                      dataUrl: dataUrl
+                    };
+                    
+                    onFileReceived(newFile);
+                    
+                    // Mark as complete and clean up to allow next file
+                    fileEntry.metadata.isComplete = true; 
                 }
+            } else {
+                console.error("Received a chunk but no corresponding file metadata was found.", data);
             }
-        } catch(e) {
-            console.error("Error receiving data", e, data);
+        } else {
+             console.log("Received unknown data type", data);
         }
     });
     
     peer.on('error', (err: Error & { code?: string }) => {
-        // 'ERR_CONNECTION_FAILURE' can be a standard connection error,
-        // but "User-Initiated Abort" is often just from peer.destroy() being called.
-        // We can ignore it to prevent false "failed" states.
         if (err.message.includes('User-Initiated Abort')) {
             console.log(`Ignoring peer abort error for ${peerId}`);
             return;
@@ -354,3 +356,5 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
 
   return { myId, devices, sendFile, peerStatuses, reconnect };
 }
+
+    
