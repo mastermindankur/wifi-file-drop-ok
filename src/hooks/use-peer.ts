@@ -1,4 +1,3 @@
-
 'use client';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import Peer from 'simple-peer';
@@ -167,14 +166,14 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
 
 
   useEffect(() => {
-    if (myDeviceNameRef.current) return;
-    myDeviceNameRef.current = getDeviceName();
+    const myDeviceName = getDeviceName();
+    myDeviceNameRef.current = myDeviceName;
 
     const newPeerId = push(ref(db, PEERS_REF)).key;
     if (newPeerId) {
         setMyId(newPeerId);
         const myDevice = {
-            name: myDeviceNameRef.current,
+            name: myDeviceName,
             type: typeof navigator !== 'undefined' && /Mobi|Android/i.test(navigator.userAgent) ? 'phone' : 'laptop',
         };
         const peerRef = ref(db, `${PEERS_REF}/${newPeerId}`);
