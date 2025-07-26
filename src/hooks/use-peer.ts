@@ -53,8 +53,8 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
   }, [myId]);
 
   const createPeer = useCallback((peerId: string, initiator: boolean) => {
-    if (peersRef.current[peerId]) {
-        peersRef.current[peerId].destroy();
+    if (peersRef.current[peerId] && !peersRef.current[peerId].destroyed) {
+        return peersRef.current[peerId];
     }
     
     updatePeerStatus(peerId, 'connecting');
@@ -111,12 +111,18 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
     peer.on('error', (err) => {
         console.error('Peer error:', peerId, err);
         updatePeerStatus(peerId, 'failed');
+        if (peersRef.current[peerId]) {
+            peersRef.current[peerId].destroy();
+            delete peersRef.current[peerId];
+        }
     });
 
     peer.on('close', () => {
         console.log("Peer closed", peerId);
         updatePeerStatus(peerId, 'disconnected');
-        delete peersRef.current[peerId];
+        if (peersRef.current[peerId]) {
+            delete peersRef.current[peerId];
+        }
     });
 
 
@@ -125,8 +131,10 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
   }, [handleSignal, onFileReceived, updatePeerStatus]);
   
   const reconnect = useCallback((peerId: string) => {
-    createPeer(peerId, true);
-  }, [createPeer]);
+    if(myId) {
+        createPeer(peerId, myId > peerId);
+    }
+  }, [createPeer, myId]);
 
 
   useEffect(() => {
@@ -167,8 +175,8 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
         for (const key in data) {
           if (key !== myId) {
             discoveredDevices.push({ id: key, ...data[key] });
-            if (!currentPeers[key] && !peerStatuses[key]) {
-                 createPeer(key, true);
+            if (!currentPeers[key] || currentPeers[key].destroyed) {
+                 createPeer(key, myId > key);
             }
           }
         }
@@ -184,22 +192,16 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
                 const { sender, data: signalData } = signals[key];
                 
                 let peer = peersRef.current[sender];
-                if (!peer) {
+                if (!peer || peer.destroyed) {
                     peer = createPeer(sender, false);
                 }
-                
-                if (peer.destroyed || peer.destroyed) {
+                                
+                if (peer.destroyed) {
                     console.log("ignoring signal for destroyed peer", sender);
                     await remove(child(signalsRef, key));
                     continue;
                 }
                 
-                if (signalData.type === 'offer' && peer.initiator) {
-                    console.log("ignoring offer from non-initiator");
-                    await remove(child(signalsRef, key));
-                    continue;
-                }
-
                 peer.signal(signalData);
                 await remove(child(signalsRef, key));
             }
@@ -210,7 +212,7 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
       unsubscribeDevices();
       unsubscribeSignals();
     };
-  }, [myId, createPeer, peerStatuses]);
+  }, [myId, createPeer]);
   
   const sendFile = (
     file: File, 
@@ -221,7 +223,11 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
   ) => {
     let peer = peersRef.current[device.id];
     if (!peer || peer.destroyed) {
-      peer = createPeer(device.id, true);
+      if(!myId) {
+        onError();
+        return;
+      }
+      peer = createPeer(device.id, myId > device.id);
     }
     
     const send = () => sendFileChunked(peer, file, onProgress, onComplete, onError);
@@ -232,14 +238,14 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
         const connectTimeout = setTimeout(() => {
             onError();
             updatePeerStatus(device.id, 'failed');
-            peer.destroy();
         }, 10000); // 10 second timeout
 
         peer.once('connect', () => {
             clearTimeout(connectTimeout);
             send();
         });
-        peer.once('error', () => {
+        peer.once('error', (err) => {
+            console.error("Peer connection failed for sendFile", err);
             clearTimeout(connectTimeout);
             onError();
         })
@@ -283,7 +289,7 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
             peer.send(JSON.stringify({
                 type: 'chunk',
                 fileId: fileId,
-                chunk: chunk,
+                chunk: Buffer.from(chunk), // Use buffer for better compatibility
                 isLastChunk: offset + chunk.byteLength >= file.size
             }));
 
