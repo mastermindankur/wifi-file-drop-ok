@@ -16,20 +16,21 @@ const firebaseConfig = {
 let app: FirebaseApp;
 let db: Database;
 
-if (typeof window !== 'undefined' && !getApps().length) {
-    if (
-        !firebaseConfig.projectId ||
-        !firebaseConfig.apiKey ||
-        !firebaseConfig.databaseURL
-    ) {
-        console.error("Firebase config is not set up correctly. Please check your .env file");
+if (typeof window !== 'undefined') {
+    if (!getApps().length) {
+        if (
+            !firebaseConfig.projectId ||
+            !firebaseConfig.apiKey
+        ) {
+            console.error("Firebase config is not set up correctly. Please check your .env file");
+        } else {
+            app = initializeApp(firebaseConfig);
+            db = getDatabase(app);
+        }
     } else {
-        app = initializeApp(firebaseConfig);
+        app = getApp();
         db = getDatabase(app);
     }
-} else if (typeof window !== 'undefined') {
-    app = getApp();
-    db = getDatabase(app);
 }
 
 export { db };
