@@ -42,3 +42,24 @@ export function getDeviceName() {
   
   return `${browserName} on ${osName}`;
 }
+
+
+export function getFunnyDeviceName() {
+    const adjectives = [
+      'Silly', 'Dancing', 'Sneaky', 'Captain', 'Agent', 'Professor', 'Doctor',
+      'Happy', 'Grumpy', 'Sleepy', 'Dopey', 'Bashful', 'Sneezy', 'Doc',
+      'Funky', 'Groovy', 'Cosmic', 'Galactic', 'Quantum', 'Techno', 'Cyber',
+      'Super', 'Mega', 'Ultra', 'Hyper', 'Power', 'Wonder', 'Incredible',
+    ];
+    const nouns = [
+      'Penguin', 'Waffles', 'Potato', 'Unicorn', 'Ninja', 'Pickle', 'Robot',
+      'Dinosaur', 'Alien', 'Ghost', 'Wizard', 'Dragon', 'Sphinx', 'Gnome',
+      'Avocado', 'Taco', 'Burrito', 'Pizza', 'Sushi', 'Noodle', 'Cupcake',
+      'Pants', 'Socks', 'Hat', 'Shoes', 'Gloves', 'Scarf', 'Cape', 'Mask',
+    ];
+
+    const randomAdjective = adjectives[Math.floor(Math.random() * adjectives.length)];
+    const randomNoun = nouns[Math.floor(Math.random() * nouns.length)];
+
+    return `${randomAdjective} ${randomNoun}`;
+}

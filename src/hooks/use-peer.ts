@@ -3,7 +3,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import Peer from 'simple-peer';
 import { db } from '@/lib/firebase';
 import { ref, onValue, set, onDisconnect, push, child, serverTimestamp, remove } from 'firebase/database';
-import { getDeviceName } from '@/lib/utils';
+import { getFunnyDeviceName } from '@/lib/utils';
 
 export interface Device {
   id: string;
@@ -30,6 +30,7 @@ const CHUNK_SIZE = 64 * 1024; // 64KB
 export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
   const [myId, setMyId] = useState<string | null>(null);
   const myDeviceNameRef = useRef<string | null>(null);
+  const [myDevice, setMyDevice] = useState<Device | null>(null);
   const [devices, setDevices] = useState<Device[]>([]);
   const peersRef = useRef<{ [key: string]: Peer.Instance }>({});
   const [peerStatuses, setPeerStatuses] = useState<{ [key: string]: PeerStatus }>({});
@@ -166,19 +167,34 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
 
 
   useEffect(() => {
-    const myDeviceName = getDeviceName();
-    myDeviceNameRef.current = myDeviceName;
+    let myFunnyName: string;
+    if (typeof window !== 'undefined' && window.sessionStorage) {
+        const storedName = window.sessionStorage.getItem('myFunnyDeviceName');
+        if (storedName) {
+            myFunnyName = storedName;
+        } else {
+            myFunnyName = getFunnyDeviceName();
+            window.sessionStorage.setItem('myFunnyDeviceName', myFunnyName);
+        }
+    } else {
+        myFunnyName = getFunnyDeviceName();
+    }
+    
+    myDeviceNameRef.current = myFunnyName;
 
     const newPeerId = push(ref(db, PEERS_REF)).key;
     if (newPeerId) {
         setMyId(newPeerId);
-        const myDevice = {
-            name: myDeviceName,
+        const myDeviceData = {
+            id: newPeerId,
+            name: myFunnyName,
             type: typeof navigator !== 'undefined' && /Mobi|Android/i.test(navigator.userAgent) ? 'phone' : 'laptop',
         };
+        setMyDevice(myDeviceData);
+
         const peerRef = ref(db, `${PEERS_REF}/${newPeerId}`);
         onDisconnect(peerRef).remove();
-        set(peerRef, {...myDevice, timestamp: serverTimestamp()});
+        set(peerRef, { name: myDeviceData.name, type: myDeviceData.type, timestamp: serverTimestamp() });
     }
 
     const cleanup = () => {
@@ -362,5 +378,5 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
     readSlice(0);
   }
 
-  return { myId, devices, sendFile, peerStatuses, reconnect };
+  return { myId, myDevice, devices, sendFile, peerStatuses, reconnect };
 }

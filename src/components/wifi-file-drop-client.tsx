@@ -2,7 +2,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Laptop, Smartphone, UploadCloud, Send, Download, Trash2, Wifi, WifiOff, CheckCircle2, XCircle, Hourglass, RefreshCw } from 'lucide-react';
+import { Laptop, Smartphone, UploadCloud, Send, Download, Trash2, Wifi, WifiOff, CheckCircle2, XCircle, Hourglass, RefreshCw, UserSquare2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
@@ -12,6 +12,7 @@ import { FileIcon } from '@/components/file-icon';
 import { cn, formatBytes } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
 import { usePeer, Device, ReceivedFile, PeerStatus } from '@/hooks/use-peer';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
 interface TransferringFile {
   id: string;
@@ -38,7 +39,7 @@ export function WiFiFileDropClient() {
     });
   }, [toast]);
 
-  const { myId, devices: discoveredDevices, sendFile: sendFileP2P, peerStatuses, reconnect } = usePeer(handleFileReceived);
+  const { myDevice, devices: discoveredDevices, sendFile: sendFileP2P, peerStatuses, reconnect } = usePeer(handleFileReceived);
   
   useEffect(() => {
     const setOnlineStatus = () => setIsOnline(navigator.onLine);
@@ -192,6 +193,7 @@ export function WiFiFileDropClient() {
 
 
   return (
+    <TooltipProvider>
     <div className="bg-background min-h-screen">
       <header className="py-4 px-6 flex items-center justify-between border-b">
         <div className="flex items-center gap-3">
@@ -200,10 +202,25 @@ export function WiFiFileDropClient() {
             </div>
             <h1 className="text-2xl font-bold text-foreground">WiFi File Drop</h1>
         </div>
-        <Badge variant={isOnline ? "default" : "destructive"} className={cn("transition-all", isOnline ? "bg-green-500/80" : "bg-destructive")}>
-            {isOnline ? <Wifi className="mr-2 h-4 w-4" /> : <WifiOff className="mr-2 h-4 w-4" />}
-            {isOnline ? "Online" : "Offline"}
-        </Badge>
+        <div className="flex items-center gap-4">
+            {myDevice && (
+                <Tooltip>
+                    <TooltipTrigger asChild>
+                        <div className="flex items-center gap-2 cursor-default">
+                             <UserSquare2 className="h-5 w-5 text-muted-foreground" />
+                            <span className="text-sm font-medium text-foreground hidden sm:inline">{myDevice.name}</span>
+                        </div>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                        <p>This is you!</p>
+                    </TooltipContent>
+                </Tooltip>
+            )}
+            <Badge variant={isOnline ? "default" : "destructive"} className={cn("transition-all", isOnline ? "bg-green-500/80" : "bg-destructive")}>
+                {isOnline ? <Wifi className="mr-2 h-4 w-4" /> : <WifiOff className="mr-2 h-4 w-4" />}
+                {isOnline ? "Online" : "Offline"}
+            </Badge>
+        </div>
       </header>
       <main className="p-4 sm:p-6 md:p-8 grid grid-cols-1 md:grid-cols-3 gap-8">
         <div className="md:col-span-2 flex flex-col gap-8">
@@ -364,7 +381,7 @@ export function WiFiFileDropClient() {
                 </ul>
               ) : (
                 <div className="text-center text-muted-foreground py-10">
-                    <p>{isOnline ? (myId ? "Searching for devices..." : "Initializing...") : "You are offline."}</p>
+                    <p>{isOnline ? (myDevice ? "Searching for devices..." : "Initializing...") : "You are offline."}</p>
                 </div>
               )}
             </CardContent>
@@ -372,5 +389,6 @@ export function WiFiFileDropClient() {
         </div>
       </main>
     </div>
+    </TooltipProvider>
   );
 }
