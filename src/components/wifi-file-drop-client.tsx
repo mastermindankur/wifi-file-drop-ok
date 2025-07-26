@@ -208,7 +208,7 @@ export function WiFiFileDropClient() {
                     <TooltipTrigger asChild>
                         <div className="flex items-center gap-2 cursor-default">
                              <UserSquare2 className="h-5 w-5 text-muted-foreground" />
-                            <span className="text-sm font-medium text-foreground hidden sm:inline">{myDevice.name}</span>
+                            <span className="text-sm font-medium text-foreground">{myDevice.name}</span>
                         </div>
                     </TooltipTrigger>
                     <TooltipContent>
