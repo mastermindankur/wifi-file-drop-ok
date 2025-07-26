@@ -16,7 +16,7 @@ const initializeFirebase = () => {
         };
 
         if (!firebaseConfig.projectId || !firebaseConfig.apiKey || !firebaseConfig.databaseURL) {
-            throw new Error("Firebase config is not set up correctly. Please check your .env file");
+            throw new Error("Firebase config is not set up correctly. Please check your .env file and ensure all NEXT_PUBLIC_FIREBASE_ variables are set.");
         }
 
         if (!getApps().length) {
