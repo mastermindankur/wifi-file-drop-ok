@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -7,16 +8,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Progress } from '@/components/ui/progress';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { Separator } from '@/components/ui/separator';
 import { FileIcon } from '@/components/file-icon';
 import { cn, formatBytes } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
-
-interface Device {
-  id: string;
-  name: string;
-  type: 'laptop' | 'phone';
-}
+import { usePeer, Device, ReceivedFile } from '@/hooks/use-peer';
 
 interface TransferringFile {
   id: string;
@@ -26,78 +21,34 @@ interface TransferringFile {
   targetDevice: string;
 }
 
-interface ReceivedFile {
-  id: string;
-  name: string;
-  size: number;
-  type: string;
-  date: string;
-  dataUrl: string; 
-}
-
-// A very simple mock peer-to-peer service for device discovery.
-// In a real app, this would be replaced by a proper networking solution (e.g., WebRTC).
-const peerService = {
-  listeners: new Set<(devices: Device[]) => void>(),
-  devices: [] as Device[],
-  myDevice: null as Device | null,
-
-  join(device: Device) {
-    this.myDevice = device;
-    // Simulate discovering other devices over time
-    setTimeout(() => this.addDevice({ id: 'device-1', name: 'Living Room PC', type: 'laptop' }), 1500);
-    setTimeout(() => this.addDevice({ id: 'device-2', name: 'My Galaxy S24', type: 'phone' }), 3000);
-    this.emitChange();
-  },
-  
-  addDevice(device: Device) {
-    if (!this.devices.find(d => d.id === device.id) && device.id !== this.myDevice?.id) {
-        this.devices.push(device);
-        this.emitChange();
-    }
-  },
-
-  getDevices() {
-    return this.devices;
-  },
-  
-  subscribe(callback: (devices: Device[]) => void) {
-    this.listeners.add(callback);
-    return () => this.listeners.delete(callback);
-  },
-  
-  emitChange() {
-    this.listeners.forEach(cb => cb([...this.devices]));
-  },
-
-  leave() {
-    this.devices = [];
-    this.myDevice = null;
-    this.emitChange();
-  }
-};
-
-
 export function WiFiFileDropClient() {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [transferringFiles, setTransferringFiles] = useState<TransferringFile[]>([]);
   const [receivedFiles, setReceivedFiles] = useState<ReceivedFile[]>([]);
-  const [discoveredDevices, setDiscoveredDevices] = useState<Device[]>([]);
-  const [isOnline, setIsOnline] = useState(false);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
 
+  const handleFileReceived = useCallback((file: ReceivedFile) => {
+    setReceivedFiles((prev) => {
+        const newFiles = [file, ...prev];
+        localStorage.setItem('receivedFiles', JSON.stringify(newFiles));
+        return newFiles;
+    });
+    toast({
+        title: "File Received!",
+        description: `You received ${file.name}.`,
+    });
+  }, [toast]);
+
+  const { myId, devices: discoveredDevices, sendFile: sendFileP2P } = usePeer(handleFileReceived);
+  
   useEffect(() => {
-    const myDevice: Device = {
-        id: `device-${Math.random().toString(36).substr(2, 9)}`,
-        name: 'My Device',
-        type: Math.random() > 0.5 ? 'laptop' : 'phone'
-    };
-    peerService.join(myDevice);
-    setIsOnline(true);
-    
-    const unsubscribe = peerService.subscribe(setDiscoveredDevices);
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
 
     const storedFiles = localStorage.getItem('receivedFiles');
     if (storedFiles) {
@@ -105,9 +56,8 @@ export function WiFiFileDropClient() {
     }
 
     return () => {
-        unsubscribe();
-        peerService.leave();
-        setIsOnline(false);
+        window.removeEventListener('online', handleOnline);
+        window.removeEventListener('offline', handleOffline);
     };
   }, []);
 
@@ -120,14 +70,42 @@ export function WiFiFileDropClient() {
   const handleSendFiles = (device: Device) => {
     if (selectedFiles.length === 0) return;
 
-    const newTransfers: TransferringFile[] = selectedFiles.map(file => ({
-      id: `${device.id}-${file.name}-${Math.random()}`,
-      file,
-      progress: 0,
-      status: 'transferring',
-      targetDevice: device.name,
-    }));
+    const newTransfers: TransferringFile[] = [];
 
+    selectedFiles.forEach(file => {
+      const transferId = `${device.id}-${file.name}-${Math.random()}`;
+      newTransfers.push({
+        id: transferId,
+        file,
+        progress: 0,
+        status: 'transferring',
+        targetDevice: device.name,
+      });
+
+      const cleanup = sendFileP2P(file, device);
+      
+      // Simulate progress for UI
+      let progress = 0;
+      const interval = setInterval(() => {
+        progress += Math.random() * 25;
+        if (progress >= 100) {
+            progress = 100;
+            clearInterval(interval);
+            setTransferringFiles(prev => prev.map(t => t.id === transferId ? {...t, status: 'complete', progress: 100} : t));
+            toast({
+                title: "Transfer Complete",
+                description: `${file.name} sent to ${device.name}.`
+            });
+            setTimeout(() => {
+              if (typeof cleanup === 'function') {
+                cleanup();
+              }
+            }, 1000);
+        }
+        setTransferringFiles(prev => prev.map(t => t.id === transferId ? {...t, progress: Math.min(progress, 100)} : t));
+      }, 200);
+    });
+    
     setTransferringFiles(prev => [...newTransfers, ...prev]);
     setSelectedFiles([]);
     
@@ -167,37 +145,14 @@ export function WiFiFileDropClient() {
   };
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      setTransferringFiles(prev =>
-        prev.map(f => {
-          if (f.status === 'transferring' && f.progress < 100) {
-            const newProgress = f.progress + Math.random() * 25;
-            const isComplete = newProgress >= 100;
-            
-            if (isComplete) {
-                toast({
-                    title: "Transfer Complete",
-                    description: `${f.file.name} sent to ${f.targetDevice}.`,
-                });
-            }
-
-            return {
-              ...f,
-              progress: Math.min(newProgress, 100),
-              status: isComplete ? 'complete' : 'transferring',
-            };
-          }
-          return f;
-        }).filter(f => f.status !== 'complete' || f.progress < 100) // Keep for a moment
-      );
-    }, 500);
-
-    return () => clearInterval(interval);
-  }, [toast]);
-  
-  useEffect(() => {
-    localStorage.setItem('receivedFiles', JSON.stringify(receivedFiles));
-  }, [receivedFiles]);
+    const activeTransfers = transferringFiles.filter(f => f.status === 'complete');
+    if (activeTransfers.length === 0 && transferringFiles.length > 0) {
+        const timeout = setTimeout(() => {
+            setTransferringFiles([]);
+        }, 5000);
+        return () => clearTimeout(timeout);
+    }
+  }, [transferringFiles]);
 
 
   return (
@@ -278,7 +233,7 @@ export function WiFiFileDropClient() {
                     <li key={item.id}>
                       <div className="flex items-center gap-3 text-sm mb-2">
                         <FileIcon mimeType={item.file.type} className="w-5 h-5 text-muted-foreground" />
-                        <span className="font-medium truncate flex-1">{item.file.name} to <span className="text-primary">{item.targetDevice}</span></span>
+                        <span className="font-medium truncate flex-1">Sending <span className="text-primary">{item.file.name}</span> to <span className="text-primary">{item.targetDevice}</span></span>
                          <Badge variant={item.status === 'complete' ? 'default' : 'secondary'} className={cn(item.status === 'complete' && "bg-green-500/80 hover:bg-green-500/70 text-primary-foreground")}>
                            {item.status}
                          </Badge>
@@ -370,5 +325,3 @@ export function WiFiFileDropClient() {
     </div>
   );
 }
-
-    
