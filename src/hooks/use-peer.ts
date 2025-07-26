@@ -30,12 +30,11 @@ const CHUNK_SIZE = 64 * 1024; // 64KB
 
 export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
   const [myId, setMyId] = useState<string | null>(null);
+  const myDeviceNameRef = useRef<string | null>(null);
   const [devices, setDevices] = useState<Device[]>([]);
   const peersRef = useRef<{ [key: string]: Peer.Instance }>({});
   const [peerStatuses, setPeerStatuses] = useState<{ [key: string]: PeerStatus }>({});
   const receivedFileChunks = useRef<{ [key: string]: { chunks: ArrayBuffer[], metadata: any } }>({});
-
-  const myDeviceName = useRef(getDeviceName());
   
   const updatePeerStatus = useCallback((peerId: string, status: PeerStatus) => {
     setPeerStatuses(prev => ({ ...prev, [peerId]: status }));
@@ -76,7 +75,8 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
         let metadata;
         try {
             const dataString = data.toString();
-            if (dataString.includes('"type":"metadata"')) {
+            // A simple check to see if it's our metadata packet
+            if (dataString.startsWith('{"type":"metadata"')) {
                 metadata = JSON.parse(dataString);
             }
         } catch (e) {
@@ -90,7 +90,6 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
                 metadata: metadata,
             };
         } else if (data instanceof ArrayBuffer || data instanceof Buffer) {
-            // It's a binary chunk. Find which file it belongs to.
             const fileId = Object.keys(receivedFileChunks.current).find(key => 
                 !receivedFileChunks.current[key].metadata.isComplete
             );
@@ -143,7 +142,9 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
 
     peer.on('close', () => {
         console.log("Peer closed", peerId);
-        updatePeerStatus(peerId, 'disconnected');
+        if (peerStatuses[peerId] !== 'failed') {
+          updatePeerStatus(peerId, 'disconnected');
+        }
         if (peersRef.current[peerId]) {
             delete peersRef.current[peerId];
         }
@@ -152,25 +153,28 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
 
     peersRef.current[peerId] = peer;
     return peer;
-  }, [handleSignal, onFileReceived, updatePeerStatus]);
+  }, [handleSignal, onFileReceived, updatePeerStatus, peerStatuses]);
   
   const reconnect = useCallback((peerId: string) => {
     if(myId) {
         if (peersRef.current[peerId] && !peersRef.current[peerId].destroyed) {
             peersRef.current[peerId].destroy();
         }
+        delete peersRef.current[peerId]; // Ensure it's removed
         createPeer(peerId, myId > peerId);
     }
   }, [createPeer, myId]);
 
 
   useEffect(() => {
+    if (myDeviceNameRef.current) return;
+    myDeviceNameRef.current = getDeviceName();
+
     const newPeerId = push(ref(db, PEERS_REF)).key;
     if (newPeerId) {
         setMyId(newPeerId);
-        const myDevice: Device = {
-            id: newPeerId,
-            name: myDeviceName.current,
+        const myDevice = {
+            name: myDeviceNameRef.current,
             type: typeof navigator !== 'undefined' && /Mobi|Android/i.test(navigator.userAgent) ? 'phone' : 'laptop',
         };
         const peerRef = ref(db, `${PEERS_REF}/${newPeerId}`);
@@ -212,6 +216,15 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
           }
         }
       }
+      // Check for devices that have disconnected
+      const newDeviceIds = new Set(discoveredDevices.map(d => d.id));
+      Object.keys(currentPeers).forEach(peerId => {
+          if(!newDeviceIds.has(peerId) && currentPeers[peerId] && !currentPeers[peerId].destroyed) {
+              currentPeers[peerId].destroy();
+              delete currentPeers[peerId];
+              updatePeerStatus(peerId, 'disconnected');
+          }
+      });
       setDevices(discoveredDevices);
     });
 
@@ -234,16 +247,9 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
                 }
                 
                 // Avoid race conditions where a peer might signal before it's fully registered.
-                if (peer.writable) {
+                if (!peer.destroyed) {
                     peer.signal(signalData);
                     await remove(child(signalsRef, key));
-                } else {
-                    setTimeout(() => {
-                        if (!peer.destroyed) {
-                            peer.signal(signalData);
-                        }
-                        remove(child(signalsRef, key));
-                    }, 500);
                 }
             }
         }
@@ -253,7 +259,7 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
       unsubscribeDevices();
       unsubscribeSignals();
     };
-  }, [myId, createPeer]);
+  }, [myId, createPeer, updatePeerStatus]);
   
   const sendFile = (
     file: File, 
@@ -263,6 +269,7 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
     onError: () => void
   ) => {
     let peer = peersRef.current[device.id];
+    
     if (!peer || peer.destroyed) {
       if(!myId) {
         onError();
@@ -279,12 +286,14 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
         const connectTimeout = setTimeout(() => {
             onError();
             updatePeerStatus(device.id, 'failed');
+            peer.destroy(); // Clean up the failed peer
         }, 10000); // 10 second timeout
 
         peer.once('connect', () => {
             clearTimeout(connectTimeout);
             send();
         });
+
         peer.once('error', (err) => {
             console.error("Peer connection failed for sendFile", err);
             clearTimeout(connectTimeout);
@@ -319,8 +328,13 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
     let offset = 0;
     const reader = new FileReader();
 
+    const readSlice = (o: number) => {
+        const slice = file.slice(o, o + CHUNK_SIZE);
+        reader.readAsArrayBuffer(slice);
+    };
+
     reader.onload = (e) => {
-        if (!e.target?.result) {
+        if (!e.target?.result || peer.destroyed) {
             onError();
             return;
         }
@@ -346,15 +360,8 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
         onError();
     }
 
-    const readSlice = (o: number) => {
-        const slice = file.slice(o, o + CHUNK_SIZE);
-        reader.readAsArrayBuffer(slice);
-    };
-
     readSlice(0);
   }
 
   return { myId, devices, sendFile, peerStatuses, reconnect };
 }
-
-    
