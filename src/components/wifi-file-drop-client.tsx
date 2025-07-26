@@ -222,8 +222,8 @@ export function WiFiFileDropClient() {
             </Badge>
         </div>
       </header>
-      <main className="p-4 sm:p-6 md:p-8 grid grid-cols-1 md:grid-cols-3 gap-8">
-        <div className="md:col-span-2 flex flex-col gap-8">
+      <main className="p-4 sm:p-6 md:p-8 grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="lg:col-span-2 flex flex-col gap-8">
           <Card 
             className={cn(
                 "transition-all duration-300",
@@ -275,6 +275,50 @@ export function WiFiFileDropClient() {
             </CardContent>
           </Card>
 
+          <div className="block lg:hidden">
+            <Card>
+              <CardHeader>
+                <CardTitle>Available Devices</CardTitle>
+                <CardDescription>Devices found on your WiFi network.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {isOnline && discoveredDevices.length > 0 ? (
+                  <ul className="space-y-3">
+                    {discoveredDevices.map(device => {
+                      const status = peerStatuses[device.id] || 'disconnected';
+                      return (
+                          <li key={device.id} className="flex items-center justify-between p-3 bg-secondary/50 rounded-md">
+                            <div className="flex items-center gap-3 overflow-hidden">
+                              {device.type === 'laptop' ? <Laptop className="w-6 h-6 text-muted-foreground" /> : <Smartphone className="w-6 h-6 text-muted-foreground" />}
+                              <div className="flex flex-col truncate">
+                                  <span className="font-medium truncate">{device.name}</span>
+                                  <PeerStatusBadge status={status}/>
+                              </div>
+                            </div>
+                            {status === 'failed' ? (
+                               <Button size="sm" variant="outline" onClick={() => reconnect(device.id)}>
+                                  <RefreshCw className="w-4 h-4 mr-2" />
+                                  Reconnect
+                              </Button>
+                            ) : (
+                              <Button size="sm" onClick={() => handleSendFiles(device)} disabled={selectedFiles.length === 0 || status !== 'connected'}>
+                                  <Send className="w-4 h-4 mr-2" />
+                                  Send
+                              </Button>
+                            )}
+                          </li>
+                      )
+                    })}
+                  </ul>
+                ) : (
+                  <div className="text-center text-muted-foreground py-10">
+                      <p>{isOnline ? (myDevice ? "Searching for devices..." : "Initializing...") : "You are offline."}</p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+          
           {transferringFiles.length > 0 && (
             <Card>
               <CardHeader>
@@ -344,7 +388,7 @@ export function WiFiFileDropClient() {
           </Card>
         </div>
 
-        <div className="md:col-span-1">
+        <div className="hidden lg:block lg:col-span-1">
           <Card>
             <CardHeader>
               <CardTitle>Available Devices</CardTitle>
