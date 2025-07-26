@@ -1,18 +1,35 @@
-import { initializeApp, getApp, getApps } from 'firebase/app';
-import { getDatabase } from 'firebase/database';
+
+import { initializeApp, getApp, getApps, FirebaseApp } from 'firebase/app';
+import { getDatabase, Database } from 'firebase/database';
 
 const firebaseConfig = {
-  projectId: 'wifi-file-drop',
-  appId: '1:4561600461:web:1753ac4c9b66ea4b478e84',
-  storageBucket: 'wifi-file-drop.firebasestorage.app',
-  apiKey: 'AIzaSyB4M6rT1fbXJn0kGbxAr-a7fHvStmte89U',
-  authDomain: 'wifi-file-drop.firebaseapp.com',
-  measurementId: '',
-  messagingSenderId: '4561600461',
-  databaseURL: 'https://wifi-file-drop-default-rtdb.firebaseio.com',
+    apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+    authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+    databaseURL: process.env.NEXT_PUBLIC_FIREBASE_DATABASE_URL,
+    projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+    storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+    messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+    appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+    measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID,
 };
 
-const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
-const db = getDatabase(app);
+let app: FirebaseApp;
+let db: Database;
 
-export { app, db };
+if (typeof window !== 'undefined' && !getApps().length) {
+    if (
+        !firebaseConfig.projectId ||
+        !firebaseConfig.apiKey ||
+        !firebaseConfig.databaseURL
+    ) {
+        console.error("Firebase config is not set up correctly. Please check your .env file");
+    } else {
+        app = initializeApp(firebaseConfig);
+        db = getDatabase(app);
+    }
+} else if (typeof window !== 'undefined') {
+    app = getApp();
+    db = getDatabase(app);
+}
+
+export { db };
