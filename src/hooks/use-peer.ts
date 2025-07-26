@@ -35,11 +35,7 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
   const [peerStatuses, setPeerStatuses] = useState<{ [key: string]: PeerStatus }>({});
   const receivedFileChunks = useRef<{ [key: string]: { chunks: ArrayBuffer[], metadata: any } }>({});
 
-  const myDevice = useRef<Device>({
-    id: '',
-    name: getDeviceName(),
-    type:  typeof navigator !== 'undefined' && /Mobi|Android/i.test(navigator.userAgent) ? 'phone' : 'laptop',
-  });
+  const myDeviceName = useRef(getDeviceName());
   
   const updatePeerStatus = useCallback((peerId: string, status: PeerStatus) => {
     setPeerStatuses(prev => ({ ...prev, [peerId]: status }));
@@ -92,11 +88,12 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
                 };
             } else if (data instanceof ArrayBuffer) {
                 // This is a raw binary chunk. Find which file it belongs to.
-                const fileEntry = Object.values(receivedFileChunks.current).find(
-                    (entry) => !entry.metadata.isComplete
+                 const fileId = Object.keys(receivedFileChunks.current).find(key => 
+                    !receivedFileChunks.current[key].metadata.isComplete
                 );
 
-                if (fileEntry) {
+                if (fileId && receivedFileChunks.current[fileId]) {
+                    const fileEntry = receivedFileChunks.current[fileId];
                     fileEntry.chunks.push(data);
                     const receivedSize = fileEntry.chunks.reduce((acc, chunk) => acc + chunk.byteLength, 0);
 
@@ -116,7 +113,7 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
                         
                         // Mark as complete and clean up
                         fileEntry.metadata.isComplete = true; 
-                        delete receivedFileChunks.current[fileEntry.metadata.fileId];
+                        delete receivedFileChunks.current[fileId];
                     }
                 }
             }
@@ -169,10 +166,14 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
     const newPeerId = push(ref(db, PEERS_REF)).key;
     if (newPeerId) {
         setMyId(newPeerId);
-        myDevice.current.id = newPeerId;
+        const myDevice: Device = {
+            id: newPeerId,
+            name: myDeviceName.current,
+            type: typeof navigator !== 'undefined' && /Mobi|Android/i.test(navigator.userAgent) ? 'phone' : 'laptop',
+        };
         const peerRef = ref(db, `${PEERS_REF}/${newPeerId}`);
         onDisconnect(peerRef).remove();
-        set(peerRef, {...myDevice.current, timestamp: serverTimestamp()});
+        set(peerRef, {...myDevice, timestamp: serverTimestamp()});
     }
 
     const cleanup = () => {
