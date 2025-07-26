@@ -25,7 +25,7 @@ export function WiFiFileDropClient() {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [transferringFiles, setTransferringFiles] = useState<TransferringFile[]>([]);
   const [receivedFiles, setReceivedFiles] = useState<ReceivedFile[]>([]);
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [isOnline, setIsOnline] = useState(true);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
@@ -45,6 +45,7 @@ export function WiFiFileDropClient() {
   const { myId, devices: discoveredDevices, sendFile: sendFileP2P } = usePeer(handleFileReceived);
   
   useEffect(() => {
+    setIsOnline(navigator.onLine);
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
     window.addEventListener('online', handleOnline);
