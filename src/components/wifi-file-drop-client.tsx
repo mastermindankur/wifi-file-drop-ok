@@ -33,7 +33,14 @@ export function WiFiFileDropClient() {
   const handleFileReceived = useCallback((file: ReceivedFile) => {
     setReceivedFiles((prev) => {
         const newFiles = [file, ...prev];
-        localStorage.setItem('receivedFiles', JSON.stringify(newFiles));
+        // Note: Storing large files in localStorage is not recommended in production.
+        // This is for demonstration purposes to persist history across reloads.
+        // A better approach would be IndexedDB or server-side storage.
+        try {
+            localStorage.setItem('receivedFiles', JSON.stringify(newFiles.map(f => ({...f, dataUrl: ''})))); // Don't store blob URLs
+        } catch (e) {
+            console.warn("Could not save to localStorage, it might be full.", e);
+        }
         return newFiles;
     });
     toast({
@@ -47,16 +54,13 @@ export function WiFiFileDropClient() {
   useEffect(() => {
     const setOnlineStatus = () => setIsOnline(navigator.onLine);
     
-    // Check if running on the client before accessing navigator
     if (typeof window !== 'undefined') {
       setOnlineStatus();
       window.addEventListener('online', setOnlineStatus);
       window.addEventListener('offline', setOnlineStatus);
 
-      const storedFiles = localStorage.getItem('receivedFiles');
-      if (storedFiles) {
-          setReceivedFiles(JSON.parse(storedFiles));
-      }
+      // We don't load files from localStorage anymore as the blob URLs are not persistent.
+      // The user will see files received in the current session.
     }
 
     return () => {
@@ -295,7 +299,7 @@ export function WiFiFileDropClient() {
            <Card>
             <CardHeader>
               <CardTitle>File History</CardTitle>
-              <CardDescription>A list of files you have received.</CardDescription>
+              <CardDescription>A list of files you have received in this session.</CardDescription>
             </CardHeader>
             <CardContent>
              {receivedFiles.length === 0 ? (
@@ -384,3 +388,5 @@ export function WiFiFileDropClient() {
     </div>
   );
 }
+
+    

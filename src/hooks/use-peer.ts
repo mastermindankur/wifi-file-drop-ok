@@ -77,39 +77,43 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
 
     peer.on('data', (data) => {
         try {
-            if (data instanceof ArrayBuffer) {
-                // This is a raw binary chunk. We need to find which file it belongs to.
-                // This assumes metadata arrives before chunks, which is a safe assumption here.
-                const fileRef = Object.values(receivedFileChunks.current).find(ref => !ref.metadata.isComplete);
-                if (fileRef) {
-                    fileRef.chunks.push(data);
-                    const receivedSize = fileRef.chunks.reduce((acc, chunk) => acc + chunk.byteLength, 0);
+            // Check for metadata first
+            if (data.toString().includes('"type":"metadata"')) {
+                const message = JSON.parse(data.toString());
+                receivedFileChunks.current[message.fileId] = {
+                    chunks: [],
+                    metadata: message,
+                };
+            } else if (data instanceof ArrayBuffer) {
+                // This is a raw binary chunk. Find the file it belongs to.
+                // The metadata should have already created an entry.
+                const fileEntry = Object.values(receivedFileChunks.current).find(
+                    (entry) => !entry.metadata.isComplete
+                );
 
-                    if (receivedSize >= fileRef.metadata.fileSize) {
-                        const blob = new Blob(fileRef.chunks, { type: fileRef.metadata.fileType });
+                if (fileEntry) {
+                    fileEntry.chunks.push(data);
+                    const receivedSize = fileEntry.chunks.reduce((acc, chunk) => acc + chunk.byteLength, 0);
+
+                    if (receivedSize >= fileEntry.metadata.fileSize) {
+                        const blob = new Blob(fileEntry.chunks, { type: fileEntry.metadata.fileType });
                         const dataUrl = URL.createObjectURL(blob);
                         
                         const newFile: ReceivedFile = {
-                          id: fileRef.metadata.fileId,
-                          name: fileRef.metadata.fileName,
-                          size: fileRef.metadata.fileSize,
-                          type: fileRef.metadata.fileType,
+                          id: fileEntry.metadata.fileId,
+                          name: fileEntry.metadata.fileName,
+                          size: fileEntry.metadata.fileSize,
+                          type: fileEntry.metadata.fileType,
                           date: new Date().toLocaleString(),
                           dataUrl: dataUrl
                         };
                         onFileReceived(newFile);
-                        delete receivedFileChunks.current[fileRef.metadata.fileId];
+                        
+                        // Mark as complete and clean up
+                        fileEntry.metadata.isComplete = true; 
+                        delete receivedFileChunks.current[fileEntry.metadata.fileId];
                     }
                 }
-                return;
-            }
-
-            const message = JSON.parse(data.toString());
-            if (message.type === 'metadata') {
-                receivedFileChunks.current[message.fileId] = {
-                    chunks: [],
-                    metadata: message
-                };
             }
         } catch(e) {
             console.error("Error receiving data", e, data);
@@ -140,7 +144,9 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
   
   const reconnect = useCallback((peerId: string) => {
     if(myId) {
-        // Being the initiator should be determined by comparing IDs to avoid race conditions.
+        if (peersRef.current[peerId] && !peersRef.current[peerId].destroyed) {
+            peersRef.current[peerId].destroy();
+        }
         createPeer(peerId, myId > peerId);
     }
   }, [createPeer, myId]);
@@ -185,7 +191,6 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
           if (key !== myId) {
             discoveredDevices.push({ id: key, ...data[key] });
             if (!currentPeers[key] || currentPeers[key].destroyed) {
-                 // The peer with the greater ID is the initiator.
                  createPeer(key, myId > key);
             }
           }
@@ -212,8 +217,18 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
                     continue;
                 }
                 
-                peer.signal(signalData);
-                await remove(child(signalsRef, key));
+                // Avoid race conditions where a peer might signal before it's fully registered.
+                if (peer.writable) {
+                    peer.signal(signalData);
+                    await remove(child(signalsRef, key));
+                } else {
+                    setTimeout(() => {
+                        if (!peer.destroyed) {
+                            peer.signal(signalData);
+                        }
+                        remove(child(signalsRef, key));
+                    }, 500);
+                }
             }
         }
     });
@@ -325,3 +340,5 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
 
   return { myId, devices, sendFile, peerStatuses, reconnect };
 }
+
+    
