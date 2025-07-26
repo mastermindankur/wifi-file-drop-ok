@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import Peer from 'simple-peer';
 import { db } from '@/lib/firebase';
-import { ref, onValue, set, onDisconnect, push, child } from 'firebase/database';
+import { ref, onValue, set, onDisconnect, push, child, serverTimestamp, remove } from 'firebase/database';
 
 export interface Device {
   id: string;
@@ -19,22 +19,33 @@ export interface ReceivedFile {
     dataUrl: string;
 }
 
+export type PeerStatus = 'connecting' | 'connected' | 'disconnected' | 'failed';
+
+
 const PEERS_REF = 'peers';
 const SIGNALS_REF = 'signals';
+const CHUNK_SIZE = 64 * 1024; // 64KB
 
 export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
   const [myId, setMyId] = useState<string | null>(null);
   const [devices, setDevices] = useState<Device[]>([]);
   const peersRef = useRef<{ [key: string]: Peer.Instance }>({});
+  const [peerStatuses, setPeerStatuses] = useState<{ [key: string]: PeerStatus }>({});
+  const receivedFileChunks = useRef<{ [key: string]: { chunks: ArrayBuffer[], metadata: any } }>({});
 
   const myDevice = useRef<Device>({
     id: '',
     name: `Device-${Math.random().toString(36).substring(2, 7)}`,
-    type: Math.random() > 0.5 ? 'laptop' : 'phone',
+    type:  typeof navigator !== 'undefined' && /Mobi|Android/i.test(navigator.userAgent) ? 'phone' : 'laptop',
   });
+  
+  const updatePeerStatus = useCallback((peerId: string, status: PeerStatus) => {
+    setPeerStatuses(prev => ({ ...prev, [peerId]: status }));
+  }, []);
 
   const handleSignal = useCallback((data: any, peerId: string) => {
-    const signalRef = push(ref(db, `${SIGNALS_REF}/${peerId}`));
+    if (!myId) return;
+    const signalRef = push(child(ref(db, SIGNALS_REF), peerId));
     set(signalRef, {
       sender: myId,
       data: data,
@@ -42,51 +53,81 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
   }, [myId]);
 
   const createPeer = useCallback((peerId: string, initiator: boolean) => {
-    // Avoid creating duplicate peers
     if (peersRef.current[peerId]) {
-      return peersRef.current[peerId];
+        peersRef.current[peerId].destroy();
     }
     
+    updatePeerStatus(peerId, 'connecting');
+
     const peer = new Peer({
       initiator: initiator,
-      trickle: false, // Set to false to send one single signal event
+      trickle: true,
     });
 
     peer.on('signal', (data) => {
       handleSignal(data, peerId);
     });
+    
+    peer.on('connect', () => {
+        console.log('Peer connected:', peerId)
+        updatePeerStatus(peerId, 'connected');
+    });
 
     peer.on('data', (data) => {
         try {
-            const fileData = JSON.parse(data.toString());
-            const blob = new Blob([fileData.chunk], { type: fileData.type });
-            const dataUrl = URL.createObjectURL(blob);
-            
-            const newFile: ReceivedFile = {
-              id: fileData.id,
-              name: fileData.name,
-              size: fileData.size,
-              type: fileData.type,
-              date: new Date().toLocaleDateString(),
-              dataUrl: dataUrl
-            };
-            onFileReceived(newFile);
+            const message = JSON.parse(data.toString());
+
+            if (message.type === 'metadata') {
+                receivedFileChunks.current[message.fileId] = {
+                    chunks: [],
+                    metadata: message
+                };
+            } else if (message.type === 'chunk') {
+                const fileRef = receivedFileChunks.current[message.fileId];
+                if(fileRef) {
+                    fileRef.chunks.push(message.chunk);
+                    if (message.isLastChunk) {
+                        const blob = new Blob(fileRef.chunks, { type: fileRef.metadata.fileType });
+                        const dataUrl = URL.createObjectURL(blob);
+                        
+                        const newFile: ReceivedFile = {
+                          id: fileRef.metadata.fileId,
+                          name: fileRef.metadata.fileName,
+                          size: fileRef.metadata.fileSize,
+                          type: fileRef.metadata.fileType,
+                          date: new Date().toLocaleString(),
+                          dataUrl: dataUrl
+                        };
+                        onFileReceived(newFile);
+                        delete receivedFileChunks.current[message.fileId];
+                    }
+                }
+            }
         } catch(e) {
             console.error("Error receiving data", e);
         }
     });
     
-    peer.on('error', (err) => console.error('Peer error:', peerId, err));
-    peer.on('connect', () => console.log('Peer connected:', peerId));
+    peer.on('error', (err) => {
+        console.error('Peer error:', peerId, err);
+        updatePeerStatus(peerId, 'failed');
+    });
+
     peer.on('close', () => {
-        console.log("closing peer", peerId);
+        console.log("Peer closed", peerId);
+        updatePeerStatus(peerId, 'disconnected');
         delete peersRef.current[peerId];
     });
 
 
     peersRef.current[peerId] = peer;
     return peer;
-  }, [handleSignal, onFileReceived]);
+  }, [handleSignal, onFileReceived, updatePeerStatus]);
+  
+  const reconnect = useCallback((peerId: string) => {
+    createPeer(peerId, true);
+  }, [createPeer]);
+
 
   useEffect(() => {
     const newPeerId = push(ref(db, PEERS_REF)).key;
@@ -95,13 +136,22 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
         myDevice.current.id = newPeerId;
         const peerRef = ref(db, `${PEERS_REF}/${newPeerId}`);
         onDisconnect(peerRef).remove();
-        set(peerRef, myDevice.current);
+        set(peerRef, {...myDevice.current, timestamp: serverTimestamp()});
     }
 
-    return () => {
+    const cleanup = () => {
         if(newPeerId) {
-            set(ref(db, `${PEERS_REF}/${newPeerId}`), null);
+            remove(ref(db, `${PEERS_REF}/${newPeerId}`));
         }
+        Object.values(peersRef.current).forEach(peer => {
+            if (!peer.destroyed) peer.destroy();
+        });
+    }
+    window.addEventListener('beforeunload', cleanup);
+    
+    return () => {
+        cleanup();
+        window.removeEventListener('beforeunload', cleanup);
     }
   }, []);
 
@@ -112,12 +162,14 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
     const unsubscribeDevices = onValue(peersDbRef, (snapshot) => {
       const data = snapshot.val();
       const discoveredDevices: Device[] = [];
+      const currentPeers = peersRef.current;
       if (data) {
         for (const key in data) {
           if (key !== myId) {
             discoveredDevices.push({ id: key, ...data[key] });
-            // Proactively create a peer connection
-            createPeer(key, true);
+            if (!currentPeers[key] && !peerStatuses[key]) {
+                 createPeer(key, true);
+            }
           }
         }
       }
@@ -126,78 +178,139 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
 
     const signalsRef = ref(db, `${SIGNALS_REF}/${myId}`);
     const unsubscribeSignals = onValue(signalsRef, async (snapshot) => {
-        const data = snapshot.val();
-        if (data) {
-            for (const key in data) {
-                const { sender, data: signalData } = data[key];
+        const signals = snapshot.val();
+        if (signals) {
+            for (const key in signals) {
+                const { sender, data: signalData } = signals[key];
                 
                 let peer = peersRef.current[sender];
                 if (!peer) {
                     peer = createPeer(sender, false);
                 }
                 
-                // Prevent signaling race conditions
+                if (peer.destroyed || peer.destroyed) {
+                    console.log("ignoring signal for destroyed peer", sender);
+                    await remove(child(signalsRef, key));
+                    continue;
+                }
+                
                 if (signalData.type === 'offer' && peer.initiator) {
+                    console.log("ignoring offer from non-initiator");
+                    await remove(child(signalsRef, key));
                     continue;
                 }
 
                 peer.signal(signalData);
-                
-                // Remove signal after processing
-                await set(child(signalsRef, key), null);
+                await remove(child(signalsRef, key));
             }
         }
     });
 
     return () => {
-        unsubscribeDevices();
-        unsubscribeSignals();
-        if(myId) {
-            set(ref(db, `${PEERS_REF}/${myId}`), null);
-        }
-        Object.values(peersRef.current).forEach(peer => {
-          if (!peer.destroyed) peer.destroy();
-        });
+      unsubscribeDevices();
+      unsubscribeSignals();
     };
-  }, [myId, createPeer]);
+  }, [myId, createPeer, peerStatuses]);
   
-  const sendFile = (file: File, device: Device) => {
+  const sendFile = (
+    file: File, 
+    device: Device, 
+    onProgress: (p: number) => void,
+    onComplete: () => void,
+    onError: () => void
+  ) => {
     let peer = peersRef.current[device.id];
-    if (!peer) {
+    if (!peer || peer.destroyed) {
       peer = createPeer(device.id, true);
     }
     
-    const send = () => sendFileChunked(peer, file);
+    const send = () => sendFileChunked(peer, file, onProgress, onComplete, onError);
 
     if (peer.connected) {
         send();
     } else {
-        peer.once('connect', send);
-    }
+        const connectTimeout = setTimeout(() => {
+            onError();
+            updatePeerStatus(device.id, 'failed');
+            peer.destroy();
+        }, 10000); // 10 second timeout
 
-    return () => {
-       // The connection is managed by the main effect, so we don't destroy it here.
-       // We can remove the connect listener if it hasn't fired yet.
-       peer.removeListener('connect', send);
+        peer.once('connect', () => {
+            clearTimeout(connectTimeout);
+            send();
+        });
+        peer.once('error', () => {
+            clearTimeout(connectTimeout);
+            onError();
+        })
     }
   };
 
-  const sendFileChunked = (peer: Peer.Instance, file: File) => {
+  const sendFileChunked = (
+    peer: Peer.Instance, 
+    file: File,
+    onProgress: (p: number) => void,
+    onComplete: () => void,
+    onError: () => void
+    ) => {
+    const fileId = `${file.name}-${Date.now()}`;
+    const metadata = {
+        type: 'metadata',
+        fileId: fileId,
+        fileName: file.name,
+        fileSize: file.size,
+        fileType: file.type,
+    };
+    
+    try {
+        peer.send(JSON.stringify(metadata));
+    } catch(e) {
+        onError();
+        return;
+    }
+
+    let offset = 0;
     const reader = new FileReader();
+
     reader.onload = (e) => {
-        if (e.target?.result) {
-          const fileData = {
-              id: `${file.name}-${Date.now()}`,
-              name: file.name,
-              type: file.type,
-              size: file.size,
-              chunk: e.target.result,
-          };
-          peer.send(JSON.stringify(fileData));
+        if (!e.target?.result) {
+            onError();
+            return;
+        }
+
+        try {
+            const chunk = e.target.result as ArrayBuffer;
+            peer.send(JSON.stringify({
+                type: 'chunk',
+                fileId: fileId,
+                chunk: chunk,
+                isLastChunk: offset + chunk.byteLength >= file.size
+            }));
+
+            offset += chunk.byteLength;
+            onProgress(Math.min(100, (offset / file.size) * 100));
+
+            if (offset < file.size) {
+                readSlice(offset);
+            } else {
+                onComplete();
+            }
+        } catch(e) {
+            onError();
         }
     };
-    reader.readAsArrayBuffer(file);
+    
+    reader.onerror = () => {
+        onError();
+    }
+
+    const readSlice = (o: number) => {
+        const slice = file.slice(o, o + CHUNK_SIZE);
+        reader.readAsArrayBuffer(slice);
+    };
+
+    readSlice(0);
   }
 
-  return { myId, devices, sendFile };
+  return { myId, devices, sendFile, peerStatuses, reconnect };
 }

@@ -2,7 +2,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Laptop, Smartphone, UploadCloud, Send, Download, Trash2, Wifi, WifiOff, CheckCircle2, XCircle, Hourglass } from 'lucide-react';
+import { Laptop, Smartphone, UploadCloud, Send, Download, Trash2, Wifi, WifiOff, CheckCircle2, XCircle, Hourglass, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
@@ -11,7 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { FileIcon } from '@/components/file-icon';
 import { cn, formatBytes } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
-import { usePeer, Device, ReceivedFile } from '@/hooks/use-peer';
+import { usePeer, Device, ReceivedFile, PeerStatus } from '@/hooks/use-peer';
 
 interface TransferringFile {
   id: string;
@@ -42,24 +42,28 @@ export function WiFiFileDropClient() {
     });
   }, [toast]);
 
-  const { myId, devices: discoveredDevices, sendFile: sendFileP2P } = usePeer(handleFileReceived);
+  const { myId, devices: discoveredDevices, sendFile: sendFileP2P, peerStatuses, reconnect } = usePeer(handleFileReceived);
   
   useEffect(() => {
-    // This effect should only run on the client
     const setOnlineStatus = () => setIsOnline(navigator.onLine);
-    setOnlineStatus(); // Set initial status
+    
+    // Check if running on the client before accessing navigator
+    if (typeof window !== 'undefined') {
+      setOnlineStatus();
+      window.addEventListener('online', setOnlineStatus);
+      window.addEventListener('offline', setOnlineStatus);
 
-    window.addEventListener('online', setOnlineStatus);
-    window.addEventListener('offline', setOnlineStatus);
-
-    const storedFiles = localStorage.getItem('receivedFiles');
-    if (storedFiles) {
-        setReceivedFiles(JSON.parse(storedFiles));
+      const storedFiles = localStorage.getItem('receivedFiles');
+      if (storedFiles) {
+          setReceivedFiles(JSON.parse(storedFiles));
+      }
     }
 
     return () => {
+      if (typeof window !== 'undefined') {
         window.removeEventListener('online', setOnlineStatus);
         window.removeEventListener('offline', setOnlineStatus);
+      }
     };
   }, []);
 
@@ -84,27 +88,28 @@ export function WiFiFileDropClient() {
         targetDevice: device.name,
       });
 
-      const cleanup = sendFileP2P(file, device);
+      const onComplete = () => {
+        setTransferringFiles(prev => prev.map(t => t.id === transferId ? {...t, status: 'complete', progress: 100} : t));
+        toast({
+            title: "Transfer Complete",
+            description: `${file.name} sent to ${device.name}.`
+        });
+      };
+
+      const onError = () => {
+         setTransferringFiles(prev => prev.map(t => t.id === transferId ? {...t, status: 'error', progress: 0} : t));
+         toast({
+            title: "Transfer Failed",
+            description: `Could not send ${file.name} to ${device.name}.`,
+            variant: "destructive"
+        });
+      }
+
+      const onProgress = (p: number) => {
+         setTransferringFiles(prev => prev.map(t => t.id === transferId ? {...t, progress: p } : t));
+      }
       
-      let progress = 0;
-      const interval = setInterval(() => {
-        progress += Math.random() * 25;
-        if (progress >= 100) {
-            progress = 100;
-            clearInterval(interval);
-            setTransferringFiles(prev => prev.map(t => t.id === transferId ? {...t, status: 'complete', progress: 100} : t));
-            toast({
-                title: "Transfer Complete",
-                description: `${file.name} sent to ${device.name}.`
-            });
-            setTimeout(() => {
-              if (typeof cleanup === 'function') {
-                cleanup();
-              }
-            }, 1000);
-        }
-        setTransferringFiles(prev => prev.map(t => t.id === transferId ? {...t, progress: Math.min(progress, 100)} : t));
-      }, 200);
+      sendFileP2P(file, device, onProgress, onComplete, onError);
     });
     
     setTransferringFiles(prev => [...newTransfers, ...prev]);
@@ -133,7 +138,9 @@ export function WiFiFileDropClient() {
   const handleDragEvents = (e: React.DragEvent<HTMLDivElement>, isEntering: boolean) => {
     e.preventDefault();
     e.stopPropagation();
-    setIsDragging(isEntering);
+    if(e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+        setIsDragging(isEntering);
+    }
   };
   
   const downloadFile = (file: ReceivedFile) => {
@@ -144,8 +151,6 @@ export function WiFiFileDropClient() {
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      // Clean up the object URL
-      URL.revokeObjectURL(file.dataUrl);
     } catch (error) {
       console.error("Failed to download file:", error);
       toast({
@@ -157,7 +162,6 @@ export function WiFiFileDropClient() {
   };
 
   useEffect(() => {
-    // Clear completed/errored transfers after 5 seconds
     if (transferringFiles.length > 0) {
       const completedOrErrored = transferringFiles.filter(f => f.status !== 'transferring');
       if (completedOrErrored.length > 0) {
@@ -178,6 +182,21 @@ export function WiFiFileDropClient() {
             return <CheckCircle2 className="h-4 w-4 text-green-500" />;
         case 'error':
             return <XCircle className="h-4 w-4 text-destructive" />;
+    }
+  }
+  
+  const PeerStatusBadge = ({ status }: { status: PeerStatus }) => {
+    switch(status) {
+        case 'connecting':
+            return <Badge variant="secondary" className="capitalize">Connecting...</Badge>
+        case 'connected':
+            return <Badge variant="default" className="bg-green-500/80 capitalize">Connected</Badge>
+        case 'disconnected':
+             return <Badge variant="destructive" className="capitalize">Offline</Badge>
+        case 'failed':
+            return <Badge variant="destructive" className="capitalize">Failed</Badge>
+        default:
+             return <Badge variant="secondary" className="capitalize">Offline</Badge>
     }
   }
 
@@ -327,18 +346,31 @@ export function WiFiFileDropClient() {
             <CardContent>
               {isOnline && discoveredDevices.length > 0 ? (
                 <ul className="space-y-3">
-                  {discoveredDevices.map(device => (
-                    <li key={device.id} className="flex items-center justify-between p-3 bg-secondary/50 rounded-md">
-                      <div className="flex items-center gap-3">
-                        {device.type === 'laptop' ? <Laptop className="w-6 h-6 text-muted-foreground" /> : <Smartphone className="w-6 h-6 text-muted-foreground" />}
-                        <span className="font-medium">{device.name}</span>
-                      </div>
-                      <Button size="sm" onClick={() => handleSendFiles(device)} disabled={selectedFiles.length === 0}>
-                        <Send className="w-4 h-4 mr-2" />
-                        Send
-                      </Button>
-                    </li>
-                  ))}
+                  {discoveredDevices.map(device => {
+                    const status = peerStatuses[device.id] || 'disconnected';
+                    return (
+                        <li key={device.id} className="flex items-center justify-between p-3 bg-secondary/50 rounded-md">
+                          <div className="flex items-center gap-3 overflow-hidden">
+                            {device.type === 'laptop' ? <Laptop className="w-6 h-6 text-muted-foreground" /> : <Smartphone className="w-6 h-6 text-muted-foreground" />}
+                            <div className="flex flex-col truncate">
+                                <span className="font-medium truncate">{device.name}</span>
+                                <PeerStatusBadge status={status}/>
+                            </div>
+                          </div>
+                          {status === 'failed' ? (
+                             <Button size="sm" variant="outline" onClick={() => reconnect(device.id)}>
+                                <RefreshCw className="w-4 h-4 mr-2" />
+                                Reconnect
+                            </Button>
+                          ) : (
+                            <Button size="sm" onClick={() => handleSendFiles(device)} disabled={selectedFiles.length === 0 || status !== 'connected'}>
+                                <Send className="w-4 h-4 mr-2" />
+                                Send
+                            </Button>
+                          )}
+                        </li>
+                    )
+                  })}
                 </ul>
               ) : (
                 <div className="text-center text-muted-foreground py-10">
