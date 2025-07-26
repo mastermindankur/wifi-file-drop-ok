@@ -31,18 +31,7 @@ export function WiFiFileDropClient() {
   const { toast } = useToast();
 
   const handleFileReceived = useCallback((file: ReceivedFile) => {
-    setReceivedFiles((prev) => {
-        const newFiles = [file, ...prev];
-        // Note: Storing large files in localStorage is not recommended in production.
-        // This is for demonstration purposes to persist history across reloads.
-        // A better approach would be IndexedDB or server-side storage.
-        try {
-            localStorage.setItem('receivedFiles', JSON.stringify(newFiles.map(f => ({...f, dataUrl: ''})))); // Don't store blob URLs
-        } catch (e) {
-            console.warn("Could not save to localStorage, it might be full.", e);
-        }
-        return newFiles;
-    });
+    setReceivedFiles((prev) => [file, ...prev]);
     toast({
         title: "File Received!",
         description: `You received ${file.name}.`,
@@ -58,9 +47,6 @@ export function WiFiFileDropClient() {
       setOnlineStatus();
       window.addEventListener('online', setOnlineStatus);
       window.addEventListener('offline', setOnlineStatus);
-
-      // We don't load files from localStorage anymore as the blob URLs are not persistent.
-      // The user will see files received in the current session.
     }
 
     return () => {
@@ -388,5 +374,3 @@ export function WiFiFileDropClient() {
     </div>
   );
 }
-
-    

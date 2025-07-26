@@ -77,16 +77,21 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
 
     peer.on('data', (data) => {
         try {
-            // Check for metadata first
-            if (data.toString().includes('"type":"metadata"')) {
-                const message = JSON.parse(data.toString());
+            // Check for metadata first by trying to parse it as JSON
+            let message;
+            try {
+              message = JSON.parse(data.toString());
+            } catch (e) {
+              // Not a JSON object, so it's a binary chunk
+            }
+
+            if (message && message.type === 'metadata') {
                 receivedFileChunks.current[message.fileId] = {
                     chunks: [],
                     metadata: message,
                 };
             } else if (data instanceof ArrayBuffer) {
-                // This is a raw binary chunk. Find the file it belongs to.
-                // The metadata should have already created an entry.
+                // This is a raw binary chunk. Find which file it belongs to.
                 const fileEntry = Object.values(receivedFileChunks.current).find(
                     (entry) => !entry.metadata.isComplete
                 );
@@ -348,5 +353,3 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
 
   return { myId, devices, sendFile, peerStatuses, reconnect };
 }
-
-    
