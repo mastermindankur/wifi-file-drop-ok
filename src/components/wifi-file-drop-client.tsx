@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Laptop, Smartphone, UploadCloud, Send, Download, Trash2, Wifi } from 'lucide-react';
+import { Laptop, Smartphone, UploadCloud, Send, Download, Trash2, Wifi, WifiOff } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { FileIcon } from '@/components/file-icon';
 import { cn, formatBytes } from '@/lib/utils';
+import { useToast } from '@/hooks/use-toast';
 
 interface Device {
   id: string;
@@ -31,26 +32,84 @@ interface ReceivedFile {
   size: number;
   type: string;
   date: string;
+  dataUrl: string; 
 }
 
-const MOCK_DEVICES: Device[] = [
-  { id: 'device-1', name: 'Living Room PC', type: 'laptop' },
-  { id: 'device-2', name: 'My Galaxy S24', type: 'phone' },
-  { id: 'device-3', name: 'Kitchen Tablet', type: 'phone' },
-];
+// A very simple mock peer-to-peer service for device discovery.
+// In a real app, this would be replaced by a proper networking solution (e.g., WebRTC).
+const peerService = {
+  listeners: new Set<(devices: Device[]) => void>(),
+  devices: [] as Device[],
+  myDevice: null as Device | null,
 
-const MOCK_RECEIVED_FILES: ReceivedFile[] = [
-    { id: 'file-1', name: 'vacation-photo-01.jpg', size: 4500000, type: 'image/jpeg', date: '2024-05-20' },
-    { id: 'file-2', name: 'project-brief.pdf', size: 1200000, type: 'application/pdf', date: '2024-05-19' },
-    { id: 'file-3', name: 'client-feedback.mp4', size: 125800000, type: 'video/mp4', date: '2024-05-18' },
-    { id: 'file-4', name: 'quarterly-report.docx', size: 850000, type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', date: '2024-05-17' },
-];
+  join(device: Device) {
+    this.myDevice = device;
+    // Simulate discovering other devices over time
+    setTimeout(() => this.addDevice({ id: 'device-1', name: 'Living Room PC', type: 'laptop' }), 1500);
+    setTimeout(() => this.addDevice({ id: 'device-2', name: 'My Galaxy S24', type: 'phone' }), 3000);
+    this.emitChange();
+  },
+  
+  addDevice(device: Device) {
+    if (!this.devices.find(d => d.id === device.id) && device.id !== this.myDevice?.id) {
+        this.devices.push(device);
+        this.emitChange();
+    }
+  },
+
+  getDevices() {
+    return this.devices;
+  },
+  
+  subscribe(callback: (devices: Device[]) => void) {
+    this.listeners.add(callback);
+    return () => this.listeners.delete(callback);
+  },
+  
+  emitChange() {
+    this.listeners.forEach(cb => cb([...this.devices]));
+  },
+
+  leave() {
+    this.devices = [];
+    this.myDevice = null;
+    this.emitChange();
+  }
+};
+
 
 export function WiFiFileDropClient() {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [transferringFiles, setTransferringFiles] = useState<TransferringFile[]>([]);
+  const [receivedFiles, setReceivedFiles] = useState<ReceivedFile[]>([]);
+  const [discoveredDevices, setDiscoveredDevices] = useState<Device[]>([]);
+  const [isOnline, setIsOnline] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const { toast } = useToast();
+
+  useEffect(() => {
+    const myDevice: Device = {
+        id: `device-${Math.random().toString(36).substr(2, 9)}`,
+        name: 'My Device',
+        type: Math.random() > 0.5 ? 'laptop' : 'phone'
+    };
+    peerService.join(myDevice);
+    setIsOnline(true);
+    
+    const unsubscribe = peerService.subscribe(setDiscoveredDevices);
+
+    const storedFiles = localStorage.getItem('receivedFiles');
+    if (storedFiles) {
+        setReceivedFiles(JSON.parse(storedFiles));
+    }
+
+    return () => {
+        unsubscribe();
+        peerService.leave();
+        setIsOnline(false);
+    };
+  }, []);
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     if (event.target.files) {
@@ -71,24 +130,40 @@ export function WiFiFileDropClient() {
 
     setTransferringFiles(prev => [...newTransfers, ...prev]);
     setSelectedFiles([]);
+    
+    toast({
+        title: "Transfer Started",
+        description: `Sending ${newTransfers.length} file(s) to ${device.name}.`
+    });
   };
 
   const removeSelectedFile = (index: number) => {
     setSelectedFiles(prev => prev.filter((_, i) => i !== index));
   };
-
+    
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      setSelectedFiles(prev => [...prev, ...Array.from(e.dataTransfer.files)]);
+      e.dataTransfer.clearData();
+    }
+  };
+  
   const handleDragEvents = (e: React.DragEvent<HTMLDivElement>, isEntering: boolean) => {
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(isEntering);
   };
   
-  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
-    handleDragEvents(e, false);
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      setSelectedFiles(prev => [...prev, ...Array.from(e.dataTransfer.files)]);
-      e.dataTransfer.clearData();
-    }
+  const downloadFile = (file: ReceivedFile) => {
+    const link = document.createElement('a');
+    link.href = file.dataUrl;
+    link.download = file.name;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   useEffect(() => {
@@ -96,28 +171,48 @@ export function WiFiFileDropClient() {
       setTransferringFiles(prev =>
         prev.map(f => {
           if (f.status === 'transferring' && f.progress < 100) {
-            const newProgress = f.progress + Math.random() * 15;
+            const newProgress = f.progress + Math.random() * 25;
+            const isComplete = newProgress >= 100;
+            
+            if (isComplete) {
+                toast({
+                    title: "Transfer Complete",
+                    description: `${f.file.name} sent to ${f.targetDevice}.`,
+                });
+            }
+
             return {
               ...f,
               progress: Math.min(newProgress, 100),
-              status: newProgress >= 100 ? 'complete' : 'transferring',
+              status: isComplete ? 'complete' : 'transferring',
             };
           }
           return f;
-        })
+        }).filter(f => f.status !== 'complete' || f.progress < 100) // Keep for a moment
       );
     }, 500);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [toast]);
+  
+  useEffect(() => {
+    localStorage.setItem('receivedFiles', JSON.stringify(receivedFiles));
+  }, [receivedFiles]);
+
 
   return (
     <div className="bg-background min-h-screen">
-      <header className="py-4 px-6 flex items-center gap-3">
-        <div className="p-2 bg-primary/10 text-primary rounded-lg">
-           <Wifi className="h-6 w-6" />
+      <header className="py-4 px-6 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+            <div className="p-2 bg-primary/10 text-primary rounded-lg">
+               <Wifi className="h-6 w-6" />
+            </div>
+            <h1 className="text-2xl font-bold text-foreground">WiFi File Drop</h1>
         </div>
-        <h1 className="text-2xl font-bold text-foreground">WiFi File Drop</h1>
+        <Badge variant={isOnline ? "default" : "destructive"} className={cn("transition-all", isOnline ? "bg-green-500/80" : "bg-destructive")}>
+            {isOnline ? <Wifi className="mr-2 h-4 w-4" /> : <WifiOff className="mr-2 h-4 w-4" />}
+            {isOnline ? "Online" : "Offline"}
+        </Badge>
       </header>
       <main className="p-4 sm:p-6 md:p-8 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2 flex flex-col gap-8">
@@ -202,6 +297,11 @@ export function WiFiFileDropClient() {
               <CardDescription>A list of files you have received.</CardDescription>
             </CardHeader>
             <CardContent>
+             {receivedFiles.length === 0 ? (
+                <div className="text-center text-muted-foreground py-10">
+                    <p>No files received yet.</p>
+                </div>
+             ) : (
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -212,7 +312,7 @@ export function WiFiFileDropClient() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {MOCK_RECEIVED_FILES.map(file => (
+                  {receivedFiles.map(file => (
                     <TableRow key={file.id}>
                       <TableCell className="font-medium">
                         <div className="flex items-center gap-3">
@@ -223,7 +323,7 @@ export function WiFiFileDropClient() {
                       <TableCell className="hidden sm:table-cell">{formatBytes(file.size)}</TableCell>
                       <TableCell className="hidden md:table-cell">{file.date}</TableCell>
                       <TableCell className="text-right">
-                        <Button variant="ghost" size="icon" className="h-8 w-8">
+                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => downloadFile(file)}>
                           <Download className="w-4 h-4" />
                         </Button>
                       </TableCell>
@@ -231,6 +331,7 @@ export function WiFiFileDropClient() {
                   ))}
                 </TableBody>
               </Table>
+              )}
             </CardContent>
           </Card>
         </div>
@@ -242,20 +343,26 @@ export function WiFiFileDropClient() {
               <CardDescription>Devices found on your WiFi network.</CardDescription>
             </CardHeader>
             <CardContent>
-              <ul className="space-y-3">
-                {MOCK_DEVICES.map(device => (
-                  <li key={device.id} className="flex items-center justify-between p-3 bg-secondary/50 rounded-md">
-                    <div className="flex items-center gap-3">
-                      {device.type === 'laptop' ? <Laptop className="w-6 h-6 text-muted-foreground" /> : <Smartphone className="w-6 h-6 text-muted-foreground" />}
-                      <span className="font-medium">{device.name}</span>
-                    </div>
-                    <Button size="sm" onClick={() => handleSendFiles(device)} disabled={selectedFiles.length === 0}>
-                      <Send className="w-4 h-4 mr-2" />
-                      Send
-                    </Button>
-                  </li>
-                ))}
-              </ul>
+              {isOnline && discoveredDevices.length > 0 ? (
+                <ul className="space-y-3">
+                  {discoveredDevices.map(device => (
+                    <li key={device.id} className="flex items-center justify-between p-3 bg-secondary/50 rounded-md">
+                      <div className="flex items-center gap-3">
+                        {device.type === 'laptop' ? <Laptop className="w-6 h-6 text-muted-foreground" /> : <Smartphone className="w-6 h-6 text-muted-foreground" />}
+                        <span className="font-medium">{device.name}</span>
+                      </div>
+                      <Button size="sm" onClick={() => handleSendFiles(device)} disabled={selectedFiles.length === 0}>
+                        <Send className="w-4 h-4 mr-2" />
+                        Send
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <div className="text-center text-muted-foreground py-10">
+                    <p>{isOnline ? "Searching for devices..." : "You are offline."}</p>
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
@@ -263,3 +370,5 @@ export function WiFiFileDropClient() {
     </div>
   );
 }
+
+    
