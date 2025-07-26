@@ -1,3 +1,4 @@
+
 'use client';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import Peer from 'simple-peer';
@@ -167,7 +168,7 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
         for (const key in data) {
           if (key !== myId) {
             discoveredDevices.push({ id: key, ...data[key] });
-            if (!currentPeers[key] && !peerStatuses[key]) {
+            if (!currentPeers[key] || currentPeers[key].destroyed) {
                  createPeer(key, true);
             }
           }
@@ -184,11 +185,11 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
                 const { sender, data: signalData } = signals[key];
                 
                 let peer = peersRef.current[sender];
-                if (!peer) {
+                if (!peer || peer.destroyed) {
                     peer = createPeer(sender, false);
                 }
                 
-                if (peer.destroyed || peer.destroyed) {
+                if (peer.destroyed) {
                     console.log("ignoring signal for destroyed peer", sender);
                     await remove(child(signalsRef, key));
                     continue;
@@ -210,7 +211,7 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
       unsubscribeDevices();
       unsubscribeSignals();
     };
-  }, [myId, createPeer, peerStatuses]);
+  }, [myId, createPeer]);
   
   const sendFile = (
     file: File, 
@@ -283,7 +284,7 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
             peer.send(JSON.stringify({
                 type: 'chunk',
                 fileId: fileId,
-                chunk: chunk,
+                chunk: Array.from(new Uint8Array(chunk)), // Convert to array for JSON serialization
                 isLastChunk: offset + chunk.byteLength >= file.size
             }));
 

@@ -55,7 +55,11 @@ export function WiFiFileDropClient() {
 
       const storedFiles = localStorage.getItem('receivedFiles');
       if (storedFiles) {
-          setReceivedFiles(JSON.parse(storedFiles));
+          try {
+            setReceivedFiles(JSON.parse(storedFiles));
+          } catch(e) {
+            console.error("Failed to parse stored files", e);
+          }
       }
     }
 
@@ -384,3 +388,4 @@ export function WiFiFileDropClient() {
     </div>
   );
 }
+
