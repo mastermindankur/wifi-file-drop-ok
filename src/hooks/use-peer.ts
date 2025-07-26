@@ -120,7 +120,15 @@ export function usePeer(onFileReceived: (file: ReceivedFile) => void) {
         }
     });
     
-    peer.on('error', (err) => {
+    peer.on('error', (err: Error & { code?: string }) => {
+        // 'ERR_CONNECTION_FAILURE' can be a standard connection error,
+        // but "User-Initiated Abort" is often just from peer.destroy() being called.
+        // We can ignore it to prevent false "failed" states.
+        if (err.message.includes('User-Initiated Abort')) {
+            console.log(`Ignoring peer abort error for ${peerId}`);
+            return;
+        }
+
         console.error('Peer error:', peerId, err);
         updatePeerStatus(peerId, 'failed');
         if (peersRef.current[peerId]) {
