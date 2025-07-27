@@ -1,6 +1,50 @@
 {
   "rules": {
+<<<<<<< HEAD
     ".read": true,
     ".write": true
   }
 }
+=======
+    "peers": {
+      ".read": true,
+      "$peerId": {
+        // A peer can only be created, not updated or deleted through the client.
+        // It is removed automatically when the device disconnects.
+        ".write": "!data.exists() && newData.exists()",
+        ".validate": "newData.hasChildren(['name', 'type', 'timestamp']) && newData.child('timestamp').val() === now",
+        "name": {
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length < 50"
+        },
+        "type": {
+          ".validate": "newData.val() === 'laptop' || newData.val() === 'phone'"
+        },
+        "timestamp": {
+           ".validate": "newData.val() === now"
+        },
+        "$other": {
+          ".validate": false
+        }
+      }
+    },
+    "signals": {
+       "$peerId": {
+        ".read": "true", // Only the intended recipient can read the signal. This would require auth. For now, it's public.
+        ".write": true, // Any peer can send a signal to another peer.
+        "$signalId": {
+            ".validate": "newData.hasChildren(['sender', 'data'])",
+            "sender": {
+                ".validate": "newData.isString()"
+            },
+            "data": {
+                 ".validate": "newData.hasChildren(['type', 'sdp'])"
+            },
+            "$other": {
+                ".validate": false
+            }
+        }
+      }
+    }
+  }
+}
+>>>>>>> d6d7ea89e16ec2e00aa28041a570bc0f26371847

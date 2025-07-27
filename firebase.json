@@ -1,5 +1,22 @@
 {
   "database": {
     "rules": "database.rules.json"
+<<<<<<< HEAD
+=======
+  },
+  "hosting": {
+    "public": "out",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+>>>>>>> d6d7ea89e16ec2e00aa28041a570bc0f26371847
   }
 }
